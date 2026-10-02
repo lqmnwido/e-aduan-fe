@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { ArrowLeft, AudioLines, FileText, PencilLine, RotateCcw, Siren } from 'lucide-react'
 import { useI18n } from '../i18n/I18nContext'
@@ -12,9 +12,10 @@ import PdfPreviewModal from '../components/PdfPreviewModal'
 import Alert from '../components/ui/Alert'
 import Switch from '../components/ui/Switch'
 import { ConfirmDialog } from '../components/ui/Modal'
+import { extractComplaintFields } from '../services/extractionService'
 
 function TranscriptSideCard({ transcript, audio }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   return (
     <section className="card card--compact side-transcript" aria-labelledby="side-transcript-title">
       <h2 id="side-transcript-title" className="side-title">
@@ -50,16 +51,75 @@ function TranscriptSideCard({ transcript, audio }) {
 }
 
 export default function FormPage() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const navigate = useNavigate()
-  const { transcript, audio, form, updateField, resetForm, startNew } = useComplaint()
+  const { transcript, audio, form, updateField, updateFields, resetForm, startNew } = useComplaint()
 
   const [attempted, setAttempted] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
   const [pdfOpen, setPdfOpen] = useState(false)
+  const [autofillState, setAutofillState] = useState('idle')
+  const [autofilledFields, setAutofilledFields] = useState([])
+  const [writingField, setWritingField] = useState(null)
+  const autofillStarted = useRef(false)
+  const autofillTimers = useRef([])
+  const mountedRef = useRef(true)
+  const formRef = useRef(form)
+  formRef.current = form
+
+  useEffect(() => {
+    // React Strict Mode intentionally mounts, cleans up, then mounts effects again
+    // in development. Restore this flag on each mount so a valid API response is
+    // not mistaken for a response from an unmounted page.
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      autofillTimers.current.forEach(clearTimeout)
+    }
+  }, [])
+
+  useEffect(() => {
+    const isBlank = COMPLAINT_FIELDS.every((field) => !String(formRef.current[field.id] ?? '').trim())
+    if (!transcript.trim() || !isBlank || autofillStarted.current) return
+    autofillStarted.current = true
+    setAutofillState('loading')
+    extractComplaintFields(transcript)
+      .then((fields) => {
+        if (!mountedRef.current) return
+        // Officer remarks are deliberately never derived from a complainant recording.
+        const pendingFields = COMPLAINT_FIELDS.filter((field) => fields[field.id])
+        if (!pendingFields.length) {
+          setAutofillState('done')
+          return
+        }
+        setAutofillState('writing')
+        pendingFields.forEach((field, index) => {
+          const timer = setTimeout(() => {
+            if (!mountedRef.current) return
+            setWritingField(field.id)
+            updateFields({ [field.id]: fields[field.id] })
+            setAutofilledFields((previous) => [...previous, field.id])
+            if (index === pendingFields.length - 1) {
+              const doneTimer = setTimeout(() => {
+                if (mountedRef.current) {
+                  setWritingField(null)
+                  setAutofillState('done')
+                }
+              }, 450)
+              autofillTimers.current.push(doneTimer)
+            }
+          }, index * 450)
+          autofillTimers.current.push(timer)
+        })
+      })
+      .catch(() => {
+        if (mountedRef.current) setAutofillState('error')
+      })
+  }, [transcript, updateFields])
 
   const errors = attempted ? validateForm(form) : {}
   const errorCount = Object.keys(errors).length
+  const isAutofilling = autofillState === 'loading' || autofillState === 'writing'
 
   const onGenerate = (event) => {
     event.preventDefault()
@@ -100,9 +160,25 @@ export default function FormPage() {
               <Alert tone="note" title={t('form.required')}>
                 {t('form.requiredHint')}
               </Alert>
+              {(autofillState === 'loading' || autofillState === 'writing') && <Alert tone="loading">{t('form.autofillLoading')}</Alert>}
+              {autofillState === 'done' && <Alert tone="success">{t('form.autofillDone')}</Alert>}
+              {autofillState === 'error' && <Alert tone="warning">{t('form.autofillError')}</Alert>}
+              {autofillState === 'writing' && (
+                <ol className="autofill-progress" aria-label={t('form.autofillProgress')}>
+                  {COMPLAINT_FIELDS.filter((field) => field.id !== 'ulasan').map((field) => {
+                    const state = writingField === field.id ? 'writing' : autofilledFields.includes(field.id) ? 'done' : 'pending'
+                    return (
+                      <li key={field.id} className={`autofill-progress__item autofill-progress__item--${state}`}>
+                        <span aria-hidden="true" />
+                        {field.label[lang]}
+                      </li>
+                    )
+                  })}
+                </ol>
+              )}
               {errorCount > 0 && <Alert tone="danger">{t('form.errSummary', { n: errorCount })}</Alert>}
 
-              <fieldset className="complaint-form__fields">
+              <fieldset className="complaint-form__fields" disabled={isAutofilling}>
                 <legend className="sr-only">{t('form.section')}</legend>
 
                 <div className="priority">
@@ -111,6 +187,7 @@ export default function FormPage() {
                     checked={form.priority}
                     onChange={(value) => updateField('priority', value)}
                     label={t('form.priority')}
+                    disabled={isAutofilling}
                   />
                 </div>
 
@@ -121,6 +198,8 @@ export default function FormPage() {
                     value={form[field.id] ?? ''}
                     onChange={(value) => updateField(field.id, value)}
                     error={errors[field.id]}
+                    autofillStatus={writingField === field.id ? 'writing' : autofilledFields.includes(field.id) ? 'done' : undefined}
+                    disabled={isAutofilling}
                   />
                 ))}
               </fieldset>
@@ -131,11 +210,11 @@ export default function FormPage() {
                   {t('form.back')}
                 </button>
                 <div className="form-actions__end">
-                  <button type="button" className="btn btn--ghost" onClick={() => setConfirmReset(true)}>
+                  <button type="button" className="btn btn--ghost" onClick={() => setConfirmReset(true)} disabled={isAutofilling}>
                     <RotateCcw size={18} aria-hidden="true" />
                     {t('form.reset')}
                   </button>
-                  <button type="submit" className="btn btn--primary btn--lg">
+                  <button type="submit" className="btn btn--primary btn--lg" disabled={isAutofilling}>
                     <FileText size={18} aria-hidden="true" />
                     {t('form.generate')}
                   </button>

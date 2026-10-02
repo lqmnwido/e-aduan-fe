@@ -390,6 +390,68 @@
   border: 0;
 }
 
+.autofill-progress {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem 0.9rem;
+  margin: -0.25rem 0 0.15rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--primary-200);
+  border-radius: var(--radius-sm);
+  background: var(--primary-50);
+  list-style: none;
+}
+
+.autofill-progress__item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
+.autofill-progress__item > span {
+  width: 0.55rem;
+  height: 0.55rem;
+  border: 2px solid var(--gray-300);
+  border-radius: 50%;
+}
+
+.autofill-progress__item--writing {
+  color: var(--primary-700);
+  font-weight: 600;
+}
+
+.autofill-progress__item--writing > span {
+  border-color: var(--primary-600);
+  border-top-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+
+.autofill-progress__item--done {
+  color: var(--success-700);
+}
+
+.autofill-progress__item--done > span {
+  border-color: var(--success-600);
+  background: var(--success-600);
+}
+
+.field--autofill-writing .textarea {
+  border-color: var(--primary-400);
+  box-shadow: 0 0 0 3px var(--primary-100);
+}
+
+.field--autofill-done .textarea {
+  border-color: var(--success-200);
+}
+
+.field__autofill-icon {
+  margin-left: 0.35rem;
+  color: var(--success-600);
+  vertical-align: -0.16em;
+}
+
 .priority {
   display: flex;
   flex-direction: column;
@@ -415,6 +477,10 @@
 }
 
 @media (max-width: 599px) {
+  .autofill-progress {
+    grid-template-columns: 1fr;
+  }
+
   .form-actions > .btn,
   .form-actions__end,
   .form-actions__end .btn {

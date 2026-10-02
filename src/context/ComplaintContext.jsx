@@ -31,6 +31,10 @@ export function ComplaintProvider({ children }) {
     setForm((previous) => ({ ...previous, [id]: value }))
   }, [])
 
+  const updateFields = useCallback((fields) => {
+    setForm((previous) => ({ ...previous, ...fields }))
+  }, [])
+
   const resetForm = useCallback(() => setForm(EMPTY_FORM), [])
 
   // clear everything for new complaint
@@ -50,10 +54,11 @@ export function ComplaintProvider({ children }) {
       setAudio,
       form,
       updateField,
+      updateFields,
       resetForm,
       startNew,
     }),
-    [transcript, speechLang, audio, setAudio, form, updateField, resetForm, startNew],
+    [transcript, speechLang, audio, setAudio, form, updateField, updateFields, resetForm, startNew],
   )
 
   return <ComplaintContext.Provider value={value}>{children}</ComplaintContext.Provider>

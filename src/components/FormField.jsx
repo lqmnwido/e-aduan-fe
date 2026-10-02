@@ -1,7 +1,7 @@
-import { CircleAlert } from 'lucide-react'
+import { CircleAlert, CircleCheck, LoaderCircle } from 'lucide-react'
 import { useI18n } from '../i18n/I18nContext'
 
-export default function FormField({ field, value, onChange, error }) {
+export default function FormField({ field, value, onChange, error, autofillStatus, disabled }) {
   const { t, lang } = useI18n()
   const id = `field-${field.id}`
   const errorId = `${id}-error`
@@ -9,7 +9,7 @@ export default function FormField({ field, value, onChange, error }) {
   const nearLimit = field.maxLength && length > field.maxLength * 0.9
 
   return (
-    <div className={`field ${error ? 'field--invalid' : ''}`}>
+    <div className={`field ${error ? 'field--invalid' : ''} ${autofillStatus ? `field--autofill-${autofillStatus}` : ''}`}>
       <label htmlFor={id} className="field__label">
         {field.label[lang]}
         {field.required && (
@@ -17,6 +17,8 @@ export default function FormField({ field, value, onChange, error }) {
             *
           </span>
         )}
+        {autofillStatus === 'writing' && <LoaderCircle className="field__autofill-icon spin" size={15} aria-label={t('form.autofillWriting')} />}
+        {autofillStatus === 'done' && <CircleCheck className="field__autofill-icon" size={15} aria-label={t('form.autofillWritten')} />}
       </label>
 
       <textarea
@@ -27,6 +29,7 @@ export default function FormField({ field, value, onChange, error }) {
         onChange={(event) => onChange(event.target.value)}
         placeholder={field.placeholder[lang]}
         maxLength={field.maxLength}
+        disabled={disabled}
         required={field.required}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}

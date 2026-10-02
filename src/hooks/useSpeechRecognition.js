@@ -1,99 +1,80 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { APP_CONFIG } from '../config'
 
-const SpeechRecognitionImpl =
-  typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : undefined
+// Low latency gateway: 100ms PCM frames, ASR after 600ms, utterance end after 400ms silence.
+function cleanTranscript(text) {
+  return String(text ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+}
 
-// errors that restarting recognition wont fix
-const FATAL_ERRORS = new Set(['not-allowed', 'service-not-allowed', 'network', 'audio-capture', 'language-not-supported'])
-
-// live transcription and web speech api
 export function useSpeechRecognition({ lang = 'ms-MY', onFinal } = {}) {
   const [listening, setListening] = useState(false)
   const [interim, setInterim] = useState('')
   const [error, setError] = useState(null)
 
   const recognitionRef = useRef(null)
-  const wantedRef = useRef(false)
   const onFinalRef = useRef(onFinal)
+  const queuedFramesRef = useRef([])
 
   useEffect(() => {
     onFinalRef.current = onFinal
   })
 
   const start = useCallback(() => {
-    if (!SpeechRecognitionImpl) return false
-    wantedRef.current = true
     setError(null)
-
-    const recognition = new SpeechRecognitionImpl()
-    recognition.lang = lang
-    recognition.continuous = true
-    recognition.interimResults = true
-    recognition.maxAlternatives = 1
-
-    recognition.onresult = (event) => {
-      let pending = ''
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i]
-        const text = result[0].transcript
-        if (result.isFinal) {
-          if (text.trim()) onFinalRef.current?.(text)
-        } else {
-          pending += text
-        }
-      }
-      setInterim(pending.trim())
-    }
-
-    recognition.onerror = (event) => {
-      if (event.error === 'no-speech' || event.error === 'aborted') return
-      if (FATAL_ERRORS.has(event.error)) wantedRef.current = false
-      setError(event.error)
-    }
-
-    // chrome stops after silence so restart it
-    recognition.onend = () => {
-      if (recognitionRef.current !== recognition) return
-      setInterim('')
-      if (wantedRef.current) {
-        try {
-          recognition.start()
-          return
-        } catch {
-          /* ignore */
-        }
-      }
-      recognitionRef.current = null
-      setListening(false)
-    }
-
     try {
-      recognition.start()
+      const socket = new WebSocket(APP_CONFIG.transcriptionWebSocketUrl)
+      socket.binaryType = 'arraybuffer'
+      socket.onopen = () => {
+        socket.send(JSON.stringify({ type: 'start', sample_rate: 16000, language: lang }))
+        queuedFramesRef.current.forEach((frame) => socket.send(frame))
+        queuedFramesRef.current = []
+        setListening(true)
+      }
+      socket.onmessage = (event) => {
+        const message = JSON.parse(event.data)
+        const transcript = cleanTranscript(message.text)
+        if (message.type === 'interim') setInterim(transcript)
+        if (message.type === 'final') {
+          if (transcript) onFinalRef.current?.(transcript)
+          setInterim('')
+        }
+        if (message.type === 'error') setError(message.code ?? 'network')
+      }
+      socket.onerror = () => setError('network')
+      socket.onclose = () => {
+        if (recognitionRef.current === socket) recognitionRef.current = null
+        setListening(false)
+      }
+      recognitionRef.current = socket
     } catch {
-      wantedRef.current = false
+      setError('network')
       return false
     }
-    recognitionRef.current = recognition
-    setListening(true)
     return true
   }, [lang])
 
   const stop = useCallback(() => {
-    wantedRef.current = false
-    // stop not abort so last bit still gets saved
-    recognitionRef.current?.stop()
+    const socket = recognitionRef.current
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'end' }))
+    else socket?.close()
     setListening(false)
+  }, [])
+
+  const sendAudio = useCallback((pcm) => {
+    const socket = recognitionRef.current
+    const buffer = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength)
+    if (socket?.readyState === WebSocket.OPEN) socket.send(buffer)
+    else if (socket?.readyState === WebSocket.CONNECTING) queuedFramesRef.current.push(buffer)
   }, [])
 
   useEffect(
     () => () => {
-      wantedRef.current = false
-      recognitionRef.current?.stop()
+      recognitionRef.current?.close()
     },
     [],
   )
 
-  return { isSupported: Boolean(SpeechRecognitionImpl), listening, interim, error, start, stop }
+  return { isSupported: typeof WebSocket !== 'undefined', listening, interim, error, start, stop, sendAudio }
 }
 
 //ughhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh

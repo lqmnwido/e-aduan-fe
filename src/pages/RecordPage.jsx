@@ -31,12 +31,12 @@ export default function RecordPage() {
   const [confirm, setConfirm] = useState(null)
   const [leaving, setLeaving] = useState(false)
 
-  const recorder = useAudioRecorder({ onComplete: setAudio })
   const appendFinal = useCallback(
     (text) => setTranscript((previous) => appendSpeechSegment(previous, text)),
     [setTranscript],
   )
   const speech = useSpeechRecognition({ lang: speechLang, onFinal: appendFinal })
+  const recorder = useAudioRecorder({ onComplete: setAudio, onPcmChunk: speech.sendAudio })
 
   // show old recording if coming back from form
   const phase = recorder.status === 'idle' && audio ? 'stopped' : recorder.status
@@ -44,8 +44,9 @@ export default function RecordPage() {
   const elapsed = recorder.status === 'idle' && audio ? audio.duration : recorder.elapsed
 
   const begin = async () => {
+    speech.start()
     const started = await recorder.start()
-    if (started) speech.start()
+    if (!started) speech.stop()
   }
   const pause = () => {
     recorder.pause()

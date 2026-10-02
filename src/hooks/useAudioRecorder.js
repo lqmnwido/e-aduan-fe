@@ -14,7 +14,7 @@ function errorCode(err) {
 }
 
 // mic recording + waveform data
-export function useAudioRecorder({ onComplete } = {}) {
+export function useAudioRecorder({ onComplete, onPcmChunk } = {}) {
   const [status, setStatusState] = useState('idle')
   const [error, setError] = useState(null)
   const [elapsed, setElapsed] = useState(0)
@@ -29,9 +29,12 @@ export function useAudioRecorder({ onComplete } = {}) {
   const segmentStartRef = useRef(0)
   const tickRef = useRef(null)
   const onCompleteRef = useRef(onComplete)
+  const onPcmChunkRef = useRef(onPcmChunk)
+  const pcmRemainderRef = useRef(new Int16Array(0))
 
   useEffect(() => {
     onCompleteRef.current = onComplete
+    onPcmChunkRef.current = onPcmChunk
   })
 
   const setStatus = (next) => {
@@ -85,11 +88,40 @@ export function useAudioRecorder({ onComplete } = {}) {
       const analyser = audioCtx.createAnalyser()
       analyser.fftSize = 1024
       analyser.smoothingTimeConstant = 0.5
-      audioCtx.createMediaStreamSource(stream).connect(analyser)
+      const source = audioCtx.createMediaStreamSource(stream)
+      source.connect(analyser)
+      // ScriptProcessor is used for broad browser support. It produces PCM frames for the ASR socket.
+      const processor = audioCtx.createScriptProcessor(1024, 1, 1)
+      const silentGain = audioCtx.createGain()
+      silentGain.gain.value = 0
+      processor.onaudioprocess = (event) => {
+        if (statusRef.current !== 'recording') return
+        const input = event.inputBuffer.getChannelData(0)
+        const targetLength = Math.round(input.length * 16000 / audioCtx.sampleRate)
+        const reduced = new Int16Array(targetLength)
+        for (let i = 0; i < targetLength; i++) {
+          const sample = input[Math.min(input.length - 1, Math.floor(i * audioCtx.sampleRate / 16000))]
+          reduced[i] = Math.max(-1, Math.min(1, sample)) * 0x7fff
+        }
+        const combined = new Int16Array(pcmRemainderRef.current.length + reduced.length)
+        combined.set(pcmRemainderRef.current)
+        combined.set(reduced, pcmRemainderRef.current.length)
+        const samplesPerChunk = 1600 // 100ms at 16kHz
+        let offset = 0
+        while (combined.length - offset >= samplesPerChunk) {
+          onPcmChunkRef.current?.(combined.slice(offset, offset + samplesPerChunk))
+          offset += samplesPerChunk
+        }
+        pcmRemainderRef.current = combined.slice(offset)
+      }
+      source.connect(processor)
+      processor.connect(silentGain)
+      silentGain.connect(audioCtx.destination)
       audioCtxRef.current = audioCtx
       analyserRef.current = analyser
 
       chunksRef.current = []
+      pcmRemainderRef.current = new Int16Array(0)
       if (typeof MediaRecorder !== 'undefined') {
         const mimeType = pickMimeType()
         const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
